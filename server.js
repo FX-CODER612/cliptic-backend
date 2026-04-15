@@ -14,7 +14,14 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
 app.use(express.json());
-app.use(express.static(__dirname));
+app.use(express.urlencoded({ extended: true }));
+
+// =========================
+// ✅ HOMEPAGE ROUTE (FIX)
+// =========================
+app.get("/", (req, res) => {
+  res.send("🚀 Backend is LIVE and working!");
+});
 
 // =========================
 // ☁️ CLOUDINARY
@@ -26,11 +33,11 @@ cloudinary.config({
 });
 
 // =========================
-// 🔌 DATABASE
+// 🔌 DATABASE (ATLAS)
 // =========================
-mongoose.connect('mongodb://127.0.0.1:27017/videoAI')
+mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB Connected"))
-  .catch(err => console.log(err));
+  .catch(err => console.log("❌ DB Error:", err));
 
 // =========================
 // 👤 USER MODEL
@@ -54,12 +61,12 @@ const Clip = mongoose.model('Clip', new mongoose.Schema({
 }));
 
 // =========================
-// 💳 RECHARGE MODEL (UPDATED)
+// 💳 RECHARGE MODEL
 // =========================
 const Recharge = mongoose.model('Recharge', new mongoose.Schema({
   userId: String,
-  type: String, // bank or crypto
-  txHash: String, // optional transaction hash
+  type: String,
+  txHash: String,
   status: { type: String, default: "pending" },
   createdAt: { type: Date, default: Date.now }
 }));
@@ -227,137 +234,6 @@ app.post('/auto-cut', auth, upload.single('video'), async (req, res) => {
 });
 
 // =========================
-// 🎨 VIDEO → ANIMATION
-// =========================
-app.post('/video-to-animation', auth, upload.single('video'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-    const user = await User.findById(req.user.id);
-
-    if (user.plan !== "pro") {
-      return res.status(403).json({ error: "Pro feature only" });
-    }
-
-    const cost = 20;
-    if (user.credits < cost) {
-      return res.status(400).json({ error: "Not enough credits" });
-    }
-
-    user.credits -= cost;
-    await user.save();
-
-    const inputPath = req.file.path;
-    const output = `animation-${Date.now()}.mp4`;
-
-    await new Promise((resolve, reject) => {
-      ffmpeg(inputPath)
-        .videoFilters([
-          "fps=12",
-          "eq=contrast=1.4:saturation=1.5",
-          "edgedetect=low=0.1:high=0.3",
-          "scale=720:1280"
-        ])
-        .output(output)
-        .on('end', resolve)
-        .on('error', reject)
-        .run();
-    });
-
-    const result = await cloudinary.uploader.upload(output, {
-      resource_type: "video"
-    });
-
-    await Clip.create({
-      userId: req.user.id,
-      file: result.secure_url,
-      score: getViralScore()
-    });
-
-    safeDelete(inputPath);
-    safeDelete(output);
-
-    res.json({
-      file: result.secure_url,
-      creditsLeft: user.credits
-    });
-
-  } catch (err) {
-    res.status(500).json({ error: "Animation failed" });
-  }
-});
-
-// =========================
-// 📊 USER CLIPS
-// =========================
-app.get('/my-clips', auth, async (req, res) => {
-  const clips = await Clip.find({ userId: req.user.id }).sort({ score: -1 });
-  res.json(clips);
-});
-
-// =========================
-// 💳 REQUEST RECHARGE (UPDATED)
-// =========================
-app.post('/request-recharge', auth, async (req, res) => {
-  const { type, txHash } = req.body;
-
-  if (!type) {
-    return res.status(400).json({ error: "Payment type required" });
-  }
-
-  await Recharge.create({
-    userId: req.user.id,
-    type,
-    txHash: txHash || ""
-  });
-
-  res.json({ message: "Request sent" });
-});
-
-// =========================
-// 🧑‍💼 ADMIN ROUTES
-// =========================
-app.get('/admin/recharges', auth, adminOnly, async (req, res) => {
-  const list = await Recharge.find().sort({ createdAt: -1 });
-  res.json(list);
-});
-
-// =========================
-// APPROVE
-// =========================
-app.post('/admin/approve/:id', auth, adminOnly, async (req, res) => {
-  const recharge = await Recharge.findById(req.params.id);
-
-  if (!recharge || recharge.status !== "pending") {
-    return res.status(400).json({ error: "Invalid request" });
-  }
-
-  const user = await User.findById(recharge.userId);
-
-  user.plan = "pro";
-  user.credits += 1000;
-
-  await user.save();
-
-  recharge.status = "approved";
-  await recharge.save();
-
-  res.json({ message: "Approved & upgraded" });
-});
-
-// =========================
-// REJECT
-// =========================
-app.post('/admin/reject/:id', auth, adminOnly, async (req, res) => {
-  const recharge = await Recharge.findById(req.params.id);
-
-  recharge.status = "rejected";
-  await recharge.save();
-
-  res.json({ message: "Rejected" });
-});
-
-// =========================
 // 🧹 SAFE DELETE
 // =========================
 function safeDelete(path) {
@@ -367,8 +243,10 @@ function safeDelete(path) {
 }
 
 // =========================
-// 🚀 START
+// 🚀 START (RENDER FIX)
 // =========================
-app.listen(3000, () => {
-  console.log("🚀 SERVER RUNNING: http://localhost:3000");
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
