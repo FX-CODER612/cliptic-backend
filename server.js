@@ -9,15 +9,20 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cloudinary = require('cloudinary').v2;
+const cors = require('cors');
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
+
+// ✅ CORS
+app.use(cors({ origin: "*" }));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // =========================
-// ✅ HOMEPAGE ROUTE (FIX)
+// ✅ HOME
 // =========================
 app.get("/", (req, res) => {
   res.send("🚀 Backend is LIVE and working!");
@@ -33,14 +38,17 @@ cloudinary.config({
 });
 
 // =========================
-// 🔌 DATABASE (ATLAS)
+// 🔌 DATABASE (SAFE)
 // =========================
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB Connected"))
-  .catch(err => console.log("❌ DB Error:", err));
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
+.then(() => console.log("✅ MongoDB Connected"))
+.catch(err => console.log("❌ DB Error:", err));
 
 // =========================
-// 👤 USER MODEL
+// MODELS
 // =========================
 const User = mongoose.model('User', new mongoose.Schema({
   email: { type: String, unique: true },
@@ -50,9 +58,6 @@ const User = mongoose.model('User', new mongoose.Schema({
   role: { type: String, default: "user" }
 }));
 
-// =========================
-// 🎬 CLIP MODEL
-// =========================
 const Clip = mongoose.model('Clip', new mongoose.Schema({
   userId: String,
   file: String,
@@ -60,19 +65,15 @@ const Clip = mongoose.model('Clip', new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 }));
 
-// =========================
-// 💳 RECHARGE MODEL
-// =========================
 const Recharge = mongoose.model('Recharge', new mongoose.Schema({
   userId: String,
   type: String,
-  txHash: String,
   status: { type: String, default: "pending" },
   createdAt: { type: Date, default: Date.now }
 }));
 
 // =========================
-// 🔐 AUTH
+// AUTH
 // =========================
 function auth(req, res, next) {
   const header = req.headers.authorization;
@@ -80,43 +81,34 @@ function auth(req, res, next) {
 
   try {
     const token = header.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
   } catch {
-    res.status(401).json({ error: "Invalid token" });
+    return res.status(401).json({ error: "Invalid token" });
   }
 }
 
 // =========================
-// 🛡 ADMIN CHECK
-// =========================
-async function adminOnly(req, res, next) {
-  const user = await User.findById(req.user.id);
-  if (!user || user.role !== "admin") {
-    return res.status(403).json({ error: "Admin only" });
-  }
-  next();
-}
-
-// =========================
-// 🧾 REGISTER
+// REGISTER
 // =========================
 app.post('/register', async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    const exists = await User.findOne({ email });
+    if (exists) return res.status(400).json({ error: "User exists" });
+
     const hashed = await bcrypt.hash(password, 10);
     await User.create({ email, password: hashed });
 
     res.json({ message: "User created" });
-  } catch {
-    res.status(400).json({ error: "User exists" });
+  } catch (err) {
+    res.status(500).json({ error: "Registration failed" });
   }
 });
 
 // =========================
-// 🔑 LOGIN
+// LOGIN
 // =========================
 app.post('/login', async (req, res) => {
   try {
@@ -137,7 +129,7 @@ app.post('/login', async (req, res) => {
 });
 
 // =========================
-// 👤 GET USER
+// GET USER
 // =========================
 app.get('/me', auth, async (req, res) => {
   const user = await User.findById(req.user.id);
@@ -145,96 +137,24 @@ app.get('/me', auth, async (req, res) => {
   res.json({
     email: user.email,
     credits: user.credits,
-    plan: user.plan,
-    role: user.role
+    plan: user.plan
   });
 });
 
 // =========================
-// 📤 UPLOAD CONFIG
+// UPLOAD CONFIG
 // =========================
 const upload = multer({ dest: 'uploads/' });
 
 // =========================
-// 🎯 VIRAL SCORE
+// VIRAL SCORE
 // =========================
 function getViralScore() {
   return Math.floor(Math.random() * 100);
 }
 
 // =========================
-// 🎬 AUTO CUT
-// =========================
-app.post('/auto-cut', auth, upload.single('video'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-    const user = await User.findById(req.user.id);
-
-    const fileSizeMB = req.file.size / (1024 * 1024);
-    const cost = Math.ceil(fileSizeMB * 10);
-
-    if (user.credits < cost) {
-      return res.status(400).json({ error: "Not enough credits" });
-    }
-
-    user.credits -= cost;
-    await user.save();
-
-    const inputPath = req.file.path;
-    const duration = parseInt(req.body.duration) || 10;
-
-    let clips = [];
-
-    for (let i = 0; i < 3; i++) {
-      const output = `clip-${Date.now()}-${i}.mp4`;
-
-      await new Promise((resolve, reject) => {
-        ffmpeg(inputPath)
-          .setStartTime(i * 5)
-          .setDuration(duration)
-          .videoFilters([
-            "crop='ih*9/16:ih'",
-            "scale=720:1280"
-          ])
-          .output(output)
-          .on('end', resolve)
-          .on('error', reject)
-          .run();
-      });
-
-      const result = await cloudinary.uploader.upload(output, {
-        resource_type: "video"
-      });
-
-      const score = getViralScore();
-
-      await Clip.create({
-        userId: req.user.id,
-        file: result.secure_url,
-        score
-      });
-
-      clips.push({ file: result.secure_url, score });
-
-      safeDelete(output);
-    }
-
-    safeDelete(inputPath);
-
-    res.json({
-      clips,
-      creditsLeft: user.credits
-    });
-
-  } catch (err) {
-    console.log(err);
-    res.status(500).json({ error: "Processing failed" });
-  }
-});
-
-// =========================
-// 🧹 SAFE DELETE
+// SAFE DELETE
 // =========================
 function safeDelete(path) {
   try {
@@ -243,7 +163,110 @@ function safeDelete(path) {
 }
 
 // =========================
-// 🚀 START (RENDER FIX)
+// AUTO CUT
+// =========================
+app.post('/auto-cut', auth, upload.single('video'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    const user = await User.findById(req.user.id);
+
+    if (user.credits < 5) {
+      return res.status(400).json({ error: "Not enough credits" });
+    }
+
+    user.credits -= 5;
+    await user.save();
+
+    const inputPath = req.file.path;
+    const output = `clip-${Date.now()}.mp4`;
+
+    await new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .setDuration(10)
+        .output(output)
+        .on('end', resolve)
+        .on('error', reject)
+        .run();
+    });
+
+    const result = await cloudinary.uploader.upload(output, {
+      resource_type: "video"
+    });
+
+    const clip = await Clip.create({
+      userId: req.user.id,
+      file: result.secure_url,
+      score: getViralScore()
+    });
+
+    safeDelete(inputPath);
+    safeDelete(output);
+
+    res.json({ clip });
+
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ error: "Processing failed" });
+  }
+});
+
+// =========================
+// GET CLIPS
+// =========================
+app.get('/my-clips', auth, async (req, res) => {
+  const clips = await Clip.find({ userId: req.user.id }).sort({ createdAt: -1 });
+  res.json(clips);
+});
+
+// =========================
+// VIDEO TO ANIMATION
+// =========================
+app.post('/video-to-animation', auth, upload.single('video'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    const result = await cloudinary.uploader.upload(req.file.path, {
+      resource_type: "video"
+    });
+
+    await Clip.create({
+      userId: req.user.id,
+      file: result.secure_url,
+      score: getViralScore()
+    });
+
+    safeDelete(req.file.path);
+
+    res.json({ message: "Converted" });
+
+  } catch (err) {
+    res.status(500).json({ error: "Conversion failed" });
+  }
+});
+
+// =========================
+// REQUEST RECHARGE
+// =========================
+app.post('/request-recharge', auth, async (req, res) => {
+  try {
+    const { type } = req.body;
+
+    if (!type) return res.status(400).json({ error: "Type required" });
+
+    await Recharge.create({
+      userId: req.user.id,
+      type
+    });
+
+    res.json({ message: "Request sent" });
+  } catch {
+    res.status(500).json({ error: "Failed" });
+  }
+});
+
+// =========================
+// START
 // =========================
 const PORT = process.env.PORT || 3000;
 
