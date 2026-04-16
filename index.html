@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AI Video Clipper</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <style>
+    body {
+      font-family: Arial;
+      background: #0f0f0f;
+      color: white;
+      text-align: center;
+    }
+
+    h1 { margin-top: 20px; }
+
+    input, button {
+      padding: 12px;
+      margin: 6px;
+      border-radius: 10px;
+      border: none;
+      width: 90%;
+      max-width: 300px;
+    }
+
+    button {
+      background: #ff0050;
+      color: white;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    button:disabled {
+      background: gray;
+      cursor: not-allowed;
+    }
+
+    video {
+      width: 100%;
+      max-width: 250px;
+      height: 450px;
+      object-fit: cover;
+      border-radius: 12px;
+    }
+
+    .clip {
+      display: inline-block;
+      margin: 10px;
+      background: #1c1c1c;
+      padding: 10px;
+      border-radius: 12px;
+      width: 260px;
+    }
+
+    .score {
+      color: #00ffcc;
+      font-weight: bold;
+    }
+
+    .box {
+      margin: 15px auto;
+      padding: 15px;
+      background: #1c1c1c;
+      border-radius: 12px;
+      width: 90%;
+      max-width: 400px;
+    }
+
+    .pro { color: gold; font-weight: bold; }
+    .free { color: #ccc; }
+    .low { color: red; font-weight: bold; }
+
+    .btn-secondary {
+      background: #222;
+    }
+
+    .preview {
+      margin-top: 10px;
+    }
+  </style>
+</head>
+
+<body>
+
+<h1>🔥 AI Viral Clip Generator</h1>
+
+<!-- USER -->
+<div id="userBox" class="box" style="display:none;">
+  <p id="userInfo"></p>
+  <button onclick="logout()">Logout</button>
+</div>
+
+<!-- AUTH -->
+<div id="authBox" class="box">
+  <input id="email" placeholder="Email">
+  <input id="password" placeholder="Password" type="password">
+  <br>
+  <button onclick="register()">Register</button>
+  <button onclick="login()">Login</button>
+</div>
+
+<!-- UPLOAD -->
+<div id="uploadBox" class="box" style="display:none;">
+  <h2>Upload Video</h2>
+
+  <input type="file" id="videoFile" onchange="previewVideo()"><br>
+
+  <video id="preview" class="preview" controls style="display:none;"></video>
+
+  <br>
+  Duration (seconds):
+  <input id="duration" value="10"><br>
+
+  <button id="uploadBtn" onclick="upload()">🎬 Generate Clips</button>
+  <button id="animBtn" class="btn-secondary" onclick="convertToAnimation()">🎨 Convert to Animation</button>
+
+  <p id="status"></p>
+</div>
+
+<!-- RECHARGE -->
+<div id="rechargeBox" class="box" style="display:none;">
+  <h2>💳 Upgrade to Pro</h2>
+
+  <p>Free: Limited credits</p>
+  <p>Pro: ₦ equivalent of $10/month</p>
+
+  <hr>
+
+  <p><b>OPay:</b><br>
+  8061980928<br>
+  Emmanuel Adamu</p>
+
+  <button onclick="requestRecharge()">I Have Paid ✅</button>
+
+  <p id="paymentStatus"></p>
+</div>
+
+<h2>Your Clips</h2>
+<div id="clips"></div>
+
+<script>
+let token = localStorage.getItem("token") || "";
+
+// INIT
+window.onload = () => {
+  if (token) {
+    showApp();
+    loadUser();
+    loadClips();
+  }
+};
+
+// AUTH
+async function register() {
+  const res = await fetch('/register', {
+    method: 'POST',
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: email.value,
+      password: password.value
+    })
+  });
+
+  const data = await res.json();
+  alert(data.message || data.error);
+}
+
+async function login() {
+  const res = await fetch('/login', {
+    method: 'POST',
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: email.value,
+      password: password.value
+    })
+  });
+
+  const data = await res.json();
+
+  if (data.token) {
+    token = data.token;
+    localStorage.setItem("token", token);
+
+    showApp();
+    loadUser();
+    loadClips();
+  } else {
+    alert(data.error);
+  }
+}
+
+function logout() {
+  localStorage.removeItem("token");
+  location.reload();
+}
+
+// UI
+function showApp() {
+  authBox.style.display = "none";
+  uploadBox.style.display = "block";
+  userBox.style.display = "block";
+  rechargeBox.style.display = "block";
+}
+
+// USER
+async function loadUser() {
+  const res = await fetch('/me', {
+    headers: { Authorization: "Bearer " + token }
+  });
+
+  if (res.status === 401) return logout();
+
+  const user = await res.json();
+
+  let planClass = user.plan === "pro" ? "pro" : "free";
+  let warning = user.credits < 50 ? "⚠️ Low credits!" : "";
+
+  userInfo.innerHTML = `
+    📧 ${user.email}<br>
+    💰 Credits: <b>${user.credits}</b><br>
+    🚀 Plan: <span class="${planClass}">${user.plan.toUpperCase()}</span><br>
+    <span class="low">${warning}</span>
+  `;
+}
+
+// PREVIEW
+function previewVideo() {
+  const file = videoFile.files[0];
+  if (!file) return;
+
+  preview.src = URL.createObjectURL(file);
+  preview.style.display = "block";
+}
+
+// UPLOAD
+async function upload() {
+  const file = videoFile.files[0];
+  const duration = durationInput.value;
+
+  if (!file) return alert("Select a video");
+
+  uploadBtn.disabled = true;
+  status.innerText = "Processing clips... ⏳";
+
+  const formData = new FormData();
+  formData.append('video', file);
+  formData.append('duration', duration);
+
+  const res = await fetch('/auto-cut', {
+    method: 'POST',
+    headers: { Authorization: "Bearer " + token },
+    body: formData
+  });
+
+  const data = await res.json();
+
+  uploadBtn.disabled = false;
+
+  if (res.ok) {
+    status.innerText = "Clips ready ✅";
+    loadUser();
+    loadClips();
+  } else {
+    status.innerText = data.error;
+  }
+}
+
+// ANIMATION
+async function convertToAnimation() {
+  const file = videoFile.files[0];
+  if (!file) return alert("Select a video first");
+
+  animBtn.disabled = true;
+  status.innerText = "Converting to animation... 🎨";
+
+  const formData = new FormData();
+  formData.append('video', file);
+
+  const res = await fetch('/video-to-animation', {
+    method: 'POST',
+    headers: { Authorization: "Bearer " + token },
+    body: formData
+  });
+
+  const data = await res.json();
+
+  animBtn.disabled = false;
+
+  if (res.ok) {
+    status.innerText = "Animation ready ✅";
+
+    clips.innerHTML = `
+      <div class="clip">
+        <video src="${data.file}" controls></video>
+        <p class="score">🎨 Animation Output</p>
+        <button onclick="download('${data.file}')">Download</button>
+      </div>
+    `;
+
+    loadUser();
+  } else {
+    status.innerText = data.error;
+  }
+}
+
+// LOAD CLIPS
+async function loadClips() {
+  const res = await fetch('/my-clips', {
+    headers: { Authorization: "Bearer " + token }
+  });
+
+  const clipsData = await res.json();
+  clips.innerHTML = "";
+
+  clipsData.forEach(c => {
+    clips.innerHTML += `
+      <div class="clip">
+        <video src="${c.file}" controls></video>
+        <p class="score">🔥 Score: ${c.score}</p>
+        <button onclick="download('${c.file}')">Download</button>
+      </div>
+    `;
+  });
+}
+
+// DOWNLOAD
+function download(url) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "video.mp4";
+  a.click();
+}
+
+// RECHARGE
+async function requestRecharge() {
+  paymentStatus.innerText = "Submitting... ⏳";
+
+  const res = await fetch('/request-recharge', {
+    method: 'POST',
+    headers: { Authorization: "Bearer " + token }
+  });
+
+  const data = await res.json();
+
+  if (res.ok) {
+    paymentStatus.innerText = "Waiting for admin approval ⏳";
+  } else {
+    paymentStatus.innerText = data.error;
+  }
+}
+
+// FIX REFERENCES
+const videoFile = document.getElementById("videoFile");
+const durationInput = document.getElementById("duration");
+const status = document.getElementById("status");
+const clips = document.getElementById("clips");
+const uploadBtn = document.getElementById("uploadBtn");
+const animBtn = document.getElementById("animBtn");
+const preview = document.getElementById("preview");
+
+</script>
+
+</body>
+</html>
