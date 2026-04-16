@@ -4,6 +4,7 @@ const express = require('express');
 const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
+const path = require('path');
 const ffmpegPath = require('ffmpeg-static');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
@@ -15,14 +16,27 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
 
-// ✅ CORS
-app.use(cors({ origin: "*" }));
+// =========================
+// ✅ CORS (SAFE)
+// =========================
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // =========================
-// ✅ HOME
+// ✅ ENSURE UPLOAD FOLDER
+// =========================
+if (!fs.existsSync('uploads')) {
+  fs.mkdirSync('uploads');
+}
+
+// =========================
+// ✅ KEEP ALIVE ROUTE (VERY IMPORTANT)
 // =========================
 app.get("/", (req, res) => {
   res.send("🚀 Backend is LIVE and working!");
@@ -38,14 +52,11 @@ cloudinary.config({
 });
 
 // =========================
-// 🔌 DATABASE (SAFE)
+// 🔌 DATABASE (STABLE)
 // =========================
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => console.log("✅ MongoDB Connected"))
-.catch(err => console.log("❌ DB Error:", err));
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("✅ MongoDB Connected"))
+  .catch(err => console.log("❌ DB Error:", err));
 
 // =========================
 // MODELS
@@ -120,7 +131,11 @@ app.post('/login', async (req, res) => {
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(400).json({ error: "Wrong password" });
 
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET);
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" } // ✅ added expiry
+    );
 
     res.json({ token });
   } catch {
@@ -134,6 +149,8 @@ app.post('/login', async (req, res) => {
 app.get('/me', auth, async (req, res) => {
   const user = await User.findById(req.user.id);
 
+  if (!user) return res.status(404).json({ error: "User not found" });
+
   res.json({
     email: user.email,
     credits: user.credits,
@@ -142,23 +159,23 @@ app.get('/me', auth, async (req, res) => {
 });
 
 // =========================
-// UPLOAD CONFIG
+// UPLOAD CONFIG (LIMIT SIZE)
 // =========================
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({
+  dest: 'uploads/',
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB
+});
 
 // =========================
-// VIRAL SCORE
+// UTILITIES
 // =========================
 function getViralScore() {
   return Math.floor(Math.random() * 100);
 }
 
-// =========================
-// SAFE DELETE
-// =========================
-function safeDelete(path) {
+function safeDelete(filePath) {
   try {
-    if (fs.existsSync(path)) fs.unlinkSync(path);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   } catch {}
 }
 
@@ -166,6 +183,8 @@ function safeDelete(path) {
 // AUTO CUT
 // =========================
 app.post('/auto-cut', auth, upload.single('video'), async (req, res) => {
+  let inputPath, output;
+
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
@@ -178,8 +197,8 @@ app.post('/auto-cut', auth, upload.single('video'), async (req, res) => {
     user.credits -= 5;
     await user.save();
 
-    const inputPath = req.file.path;
-    const output = `clip-${Date.now()}.mp4`;
+    inputPath = req.file.path;
+    output = path.join('uploads', `clip-${Date.now()}.mp4`);
 
     await new Promise((resolve, reject) => {
       ffmpeg(inputPath)
@@ -200,14 +219,14 @@ app.post('/auto-cut', auth, upload.single('video'), async (req, res) => {
       score: getViralScore()
     });
 
-    safeDelete(inputPath);
-    safeDelete(output);
-
     res.json({ clip });
 
   } catch (err) {
-    console.log(err);
+    console.log("AUTO CUT ERROR:", err);
     res.status(500).json({ error: "Processing failed" });
+  } finally {
+    safeDelete(inputPath);
+    safeDelete(output);
   }
 });
 
@@ -223,10 +242,14 @@ app.get('/my-clips', auth, async (req, res) => {
 // VIDEO TO ANIMATION
 // =========================
 app.post('/video-to-animation', auth, upload.single('video'), async (req, res) => {
+  let filePath;
+
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-    const result = await cloudinary.uploader.upload(req.file.path, {
+    filePath = req.file.path;
+
+    const result = await cloudinary.uploader.upload(filePath, {
       resource_type: "video"
     });
 
@@ -236,12 +259,13 @@ app.post('/video-to-animation', auth, upload.single('video'), async (req, res) =
       score: getViralScore()
     });
 
-    safeDelete(req.file.path);
-
     res.json({ message: "Converted" });
 
   } catch (err) {
+    console.log("ANIMATION ERROR:", err);
     res.status(500).json({ error: "Conversion failed" });
+  } finally {
+    safeDelete(filePath);
   }
 });
 
@@ -266,7 +290,14 @@ app.post('/request-recharge', auth, async (req, res) => {
 });
 
 // =========================
-// START
+// GLOBAL ERROR HANDLER
+// =========================
+process.on("unhandledRejection", err => {
+  console.log("UNHANDLED ERROR:", err);
+});
+
+// =========================
+// START SERVER
 // =========================
 const PORT = process.env.PORT || 3000;
 
